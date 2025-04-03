@@ -25,6 +25,10 @@ class TestPureRelationOperationSequenceREPL(unittest.TestCase):
         """Check if REPL is running before running tests."""
         if not is_repl_running():
             self.skipTest("REPL is not running")
+
+    def tearDown(self):
+        send_to_repl("drop local::DuckDuckConnection employees")
+        send_to_repl("drop local::DuckDuckConnection departments")
     
     def _create_test_data(self, temp_dir):
         """Create test data for REPL tests."""
