@@ -13,6 +13,9 @@ import subprocess
 import time
 from cloud_dataframe.core.dataframe import DataFrame, Sort
 from cloud_dataframe.type_system.column import col, literal, count, avg, sum
+from cloud_dataframe.tests.unit.repl_utils import (
+    send_to_repl, load_csv_to_repl, execute_pure_query, is_repl_running
+)
 
 
 class TestPureRelationOperationSequenceREPL(unittest.TestCase):
@@ -20,14 +23,7 @@ class TestPureRelationOperationSequenceREPL(unittest.TestCase):
     
     def setUp(self):
         """Check if REPL is running before running tests."""
-        repl_process = subprocess.Popen(
-            ["ps", "-ef"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
-        )
-        output, _ = repl_process.communicate()
-        if "org.finos.legend.engine.repl.relational.client.RClient" not in output:
+        if not is_repl_running():
             self.skipTest("REPL is not running")
     
     def _create_test_data(self, temp_dir):
@@ -66,8 +62,9 @@ class TestPureRelationOperationSequenceREPL(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             employee_csv, _ = self._create_test_data(temp_dir)
             
-            load_cmd = f"load {employee_csv} local::DuckDuckConnection employees"
-            print(f"Would execute in REPL: {load_cmd}")
+            load_response = load_csv_to_repl(employee_csv, "local::DuckDuckConnection", "employees")
+            if "error" in load_response:
+                self.fail(f"Failed to load data into REPL: {load_response['error']}")
             
             df = DataFrame.from_("employees")
             df = df.limit(10)  # Normally comes last in SQL
@@ -81,17 +78,15 @@ class TestPureRelationOperationSequenceREPL(unittest.TestCase):
             
             pure_query = "#>{local::DuckDuckDatabase.employees}#->limit(10)->select(~[id, name])->filter(x | $x.id > 2)"
             
-            print(f"Executing in REPL: {pure_query}")
+            repl_response = execute_pure_query(pure_query)
+            if "error" in repl_response:
+                self.fail(f"Failed to execute query in REPL: {repl_response['error']}")
             
-            repl_response = {
-                "sql": "SELECT x.id, x.name FROM employees AS x LIMIT 10 WHERE x.id > 2",
-                "result": [
-                    {"id": 3, "name": "Charlie"},
-                    {"id": 4, "name": "Diana"},
-                    {"id": 5, "name": "Eve"}
-                ]
-            }
+            self.assertIn("sql", repl_response)
+            expected_sql = "SELECT x.id, x.name FROM employees AS x LIMIT 10 WHERE x.id > 2"
+            self.assertEqual(expected_sql, repl_response["sql"].strip())
             
+            self.assertIn("result", repl_response)
             expected_rows = [
                 {"id": 3, "name": "Charlie"},
                 {"id": 4, "name": "Diana"},
@@ -105,11 +100,13 @@ class TestPureRelationOperationSequenceREPL(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             employee_csv, department_csv = self._create_test_data(temp_dir)
             
-            load_employees_cmd = f"load {employee_csv} local::DuckDuckConnection employees"
-            load_departments_cmd = f"load {department_csv} local::DuckDuckConnection departments"
-            
-            print(f"Would execute in REPL: {load_employees_cmd}")
-            print(f"Would execute in REPL: {load_departments_cmd}")
+            load_employees_response = load_csv_to_repl(employee_csv, "local::DuckDuckConnection", "employees")
+            if "error" in load_employees_response:
+                self.fail(f"Failed to load employees data into REPL: {load_employees_response['error']}")
+                
+            load_departments_response = load_csv_to_repl(department_csv, "local::DuckDuckConnection", "departments")
+            if "error" in load_departments_response:
+                self.fail(f"Failed to load departments data into REPL: {load_departments_response['error']}")
             
             employees = DataFrame.from_("employees")
             departments = DataFrame.from_("departments")
@@ -134,16 +131,15 @@ class TestPureRelationOperationSequenceREPL(unittest.TestCase):
             
             pure_query = "#>{local::DuckDuckDatabase.employees}#->join(#>{local::DuckDuckDatabase.departments}#, JoinKind.INNER, {x, y | $x.department_id == $y.id})->limit(3)->select(~[id, name, name as \"department_name\", salary])->filter(x | $x.salary > 70000)"
             
-            print(f"Executing in REPL: {pure_query}")
+            repl_response = execute_pure_query(pure_query)
+            if "error" in repl_response:
+                self.fail(f"Failed to execute query in REPL: {repl_response['error']}")
             
-            repl_response = {
-                "sql": "SELECT e.id, e.name, d.name AS department_name, e.salary FROM employees AS e INNER JOIN departments AS d ON e.department_id = d.id LIMIT 3 WHERE e.salary > 70000",
-                "result": [
-                    {"id": 1, "name": "Alice", "department_name": "Engineering", "salary": 75000},
-                    {"id": 2, "name": "Bob", "department_name": "Marketing", "salary": 85000}
-                ]
-            }
+            self.assertIn("sql", repl_response)
+            expected_sql = "SELECT e.id, e.name, d.name AS department_name, e.salary FROM employees AS e INNER JOIN departments AS d ON e.department_id = d.id LIMIT 3 WHERE e.salary > 70000"
+            self.assertEqual(expected_sql, repl_response["sql"].strip())
             
+            self.assertIn("result", repl_response)
             expected_rows = [
                 {"id": 1, "name": "Alice", "department_name": "Engineering", "salary": 75000},
                 {"id": 2, "name": "Bob", "department_name": "Marketing", "salary": 85000}
@@ -156,8 +152,9 @@ class TestPureRelationOperationSequenceREPL(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             employee_csv, _ = self._create_test_data(temp_dir)
             
-            load_cmd = f"load {employee_csv} local::DuckDuckConnection employees"
-            print(f"Would execute in REPL: {load_cmd}")
+            load_response = load_csv_to_repl(employee_csv, "local::DuckDuckConnection", "employees")
+            if "error" in load_response:
+                self.fail(f"Failed to load data into REPL: {load_response['error']}")
             
             df = DataFrame.from_("employees")
             df = df.select(
@@ -175,17 +172,15 @@ class TestPureRelationOperationSequenceREPL(unittest.TestCase):
             
             pure_query = "#>{local::DuckDuckDatabase.employees}#->select(~[department_id, x | $x.id->count() AS \"employee_count\", x | $x.salary->average() AS \"avg_salary\"])->groupBy(~[department_id])->sort(descending(~avg_salary))"
             
-            print(f"Executing in REPL: {pure_query}")
+            repl_response = execute_pure_query(pure_query)
+            if "error" in repl_response:
+                self.fail(f"Failed to execute query in REPL: {repl_response['error']}")
             
-            repl_response = {
-                "sql": "SELECT x.department_id, COUNT(x.id) AS employee_count, AVG(x.salary) AS avg_salary FROM employees AS x GROUP BY x.department_id ORDER BY avg_salary DESC",
-                "result": [
-                    {"department_id": 103, "employee_count": 1, "avg_salary": 95000.0},
-                    {"department_id": 102, "employee_count": 2, "avg_salary": 77500.0},
-                    {"department_id": 101, "employee_count": 2, "avg_salary": 70000.0}
-                ]
-            }
+            self.assertIn("sql", repl_response)
+            expected_sql = "SELECT x.department_id, COUNT(x.id) AS employee_count, AVG(x.salary) AS avg_salary FROM employees AS x GROUP BY x.department_id ORDER BY avg_salary DESC"
+            self.assertEqual(expected_sql, repl_response["sql"].strip())
             
+            self.assertIn("result", repl_response)
             expected_rows = [
                 {"department_id": 103, "employee_count": 1, "avg_salary": 95000.0},
                 {"department_id": 102, "employee_count": 2, "avg_salary": 77500.0},
@@ -199,8 +194,9 @@ class TestPureRelationOperationSequenceREPL(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             employee_csv, _ = self._create_test_data(temp_dir)
             
-            load_cmd = f"load {employee_csv} local::DuckDuckConnection employees"
-            print(f"Would execute in REPL: {load_cmd}")
+            load_response = load_csv_to_repl(employee_csv, "local::DuckDuckConnection", "employees")
+            if "error" in load_response:
+                self.fail(f"Failed to load data into REPL: {load_response['error']}")
             
             df = DataFrame.from_("employees")
             df = df.select(
@@ -218,16 +214,15 @@ class TestPureRelationOperationSequenceREPL(unittest.TestCase):
             
             pure_query = "#>{local::DuckDuckDatabase.employees}#->select(~[department_id, x | $x.id->count() AS \"employee_count\", x | $x.salary->average() AS \"avg_salary\"])->groupBy(~[department_id])->filter(x | $x.avg_salary > 75000)"
             
-            print(f"Executing in REPL: {pure_query}")
+            repl_response = execute_pure_query(pure_query)
+            if "error" in repl_response:
+                self.fail(f"Failed to execute query in REPL: {repl_response['error']}")
             
-            repl_response = {
-                "sql": "SELECT x.department_id, COUNT(x.id) AS employee_count, AVG(x.salary) AS avg_salary FROM employees AS x GROUP BY x.department_id HAVING avg_salary > 75000",
-                "result": [
-                    {"department_id": 103, "employee_count": 1, "avg_salary": 95000.0},
-                    {"department_id": 102, "employee_count": 2, "avg_salary": 77500.0}
-                ]
-            }
+            self.assertIn("sql", repl_response)
+            expected_sql = "SELECT x.department_id, COUNT(x.id) AS employee_count, AVG(x.salary) AS avg_salary FROM employees AS x GROUP BY x.department_id HAVING avg_salary > 75000"
+            self.assertEqual(expected_sql, repl_response["sql"].strip())
             
+            self.assertIn("result", repl_response)
             expected_rows = [
                 {"department_id": 103, "employee_count": 1, "avg_salary": 95000.0},
                 {"department_id": 102, "employee_count": 2, "avg_salary": 77500.0}
@@ -327,11 +322,13 @@ class TestPureRelationOperationSequenceREPL(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             employee_csv, department_csv = self._create_test_data(temp_dir)
             
-            load_employees_cmd = f"load {employee_csv} local::DuckDuckConnection employees"
-            load_departments_cmd = f"load {department_csv} local::DuckDuckConnection departments"
-            
-            print(f"Would execute in REPL: {load_employees_cmd}")
-            print(f"Would execute in REPL: {load_departments_cmd}")
+            load_employees_response = load_csv_to_repl(employee_csv, "local::DuckDuckConnection", "employees")
+            if "error" in load_employees_response:
+                self.fail(f"Failed to load employees data into REPL: {load_employees_response['error']}")
+                
+            load_departments_response = load_csv_to_repl(department_csv, "local::DuckDuckConnection", "departments")
+            if "error" in load_departments_response:
+                self.fail(f"Failed to load departments data into REPL: {load_departments_response['error']}")
             
             dept_counts = DataFrame.from_("employees")
             dept_counts = dept_counts.group_by(lambda x: x.department_id)
@@ -359,16 +356,15 @@ class TestPureRelationOperationSequenceREPL(unittest.TestCase):
             
             pure_query = "let dept_counts = #>{local::DuckDuckDatabase.employees}#->groupBy(~[department_id])->select(~[department_id, x | $x.id->count() AS \"employee_count\"]);\n#>{local::DuckDuckDatabase.departments}#->join($dept_counts, JoinKind.INNER, {x, y | $x.id == $y.department_id})->select(~[name AS \"department_name\", employee_count])->filter(x | $x.employee_count > 1)->sort(descending(~employee_count))"
             
-            print(f"Executing in REPL: {pure_query}")
+            repl_response = execute_pure_query(pure_query)
+            if "error" in repl_response:
+                self.fail(f"Failed to execute query in REPL: {repl_response['error']}")
             
-            repl_response = {
-                "sql": "WITH dept_counts AS (SELECT x.department_id, COUNT(x.id) AS employee_count FROM employees AS x GROUP BY x.department_id) SELECT d.name AS department_name, dc.employee_count FROM departments AS d INNER JOIN dept_counts AS dc ON d.id = dc.department_id WHERE dc.employee_count > 1 ORDER BY dc.employee_count DESC",
-                "result": [
-                    {"department_name": "Engineering", "employee_count": 2},
-                    {"department_name": "Marketing", "employee_count": 2}
-                ]
-            }
+            self.assertIn("sql", repl_response)
+            expected_sql = "WITH dept_counts AS (SELECT x.department_id, COUNT(x.id) AS employee_count FROM employees AS x GROUP BY x.department_id) SELECT d.name AS department_name, dc.employee_count FROM departments AS d INNER JOIN dept_counts AS dc ON d.id = dc.department_id WHERE dc.employee_count > 1 ORDER BY dc.employee_count DESC"
+            self.assertEqual(expected_sql, repl_response["sql"].strip())
             
+            self.assertIn("result", repl_response)
             expected_rows = [
                 {"department_name": "Engineering", "employee_count": 2},
                 {"department_name": "Marketing", "employee_count": 2}
@@ -381,8 +377,9 @@ class TestPureRelationOperationSequenceREPL(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             employee_csv, _ = self._create_test_data(temp_dir)
             
-            load_cmd = f"load {employee_csv} local::DuckDuckConnection employees"
-            print(f"Would execute in REPL: {load_cmd}")
+            load_response = load_csv_to_repl(employee_csv, "local::DuckDuckConnection", "employees")
+            if "error" in load_response:
+                self.fail(f"Failed to load data into REPL: {load_response['error']}")
             
             df = DataFrame.from_("employees")
             df = df.order_by(lambda x: x.salary, "DESC")  # Order by first
@@ -397,16 +394,15 @@ class TestPureRelationOperationSequenceREPL(unittest.TestCase):
             
             pure_query = "#>{local::DuckDuckDatabase.employees}#->sort(descending(~salary))->drop(2)->limit(2)->select(~[id, name, salary])"
             
-            print(f"Executing in REPL: {pure_query}")
+            repl_response = execute_pure_query(pure_query)
+            if "error" in repl_response:
+                self.fail(f"Failed to execute query in REPL: {repl_response['error']}")
             
-            repl_response = {
-                "sql": "SELECT x.id, x.name, x.salary FROM employees AS x ORDER BY x.salary DESC LIMIT 2 OFFSET 2",
-                "result": [
-                    {"id": 1, "name": "Alice", "salary": 75000},
-                    {"id": 5, "name": "Eve", "salary": 70000}
-                ]
-            }
+            self.assertIn("sql", repl_response)
+            expected_sql = "SELECT x.id, x.name, x.salary FROM employees AS x ORDER BY x.salary DESC LIMIT 2 OFFSET 2"
+            self.assertEqual(expected_sql, repl_response["sql"].strip())
             
+            self.assertIn("result", repl_response)
             expected_rows = [
                 {"id": 1, "name": "Alice", "salary": 75000},
                 {"id": 5, "name": "Eve", "salary": 70000}
