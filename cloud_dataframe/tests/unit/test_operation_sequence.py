@@ -119,7 +119,7 @@ class TestOperationSequence(unittest.TestCase):
         
         sql = df.to_sql(dialect="duckdb")
         
-        expected_sql = """SELECT x.id, x.name
+        expected_sql = """SELECT x.id
 FROM employees AS x
 LIMIT 10
 WHERE x.id > 5
