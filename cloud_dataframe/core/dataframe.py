@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 
 from ..type_system.column import Column, ColumnReference, Expression, LiteralExpression
 from ..type_system.schema import TableSchema, ColSpec, create_dynamic_dataclass_from_schema
+from .operations import Operation
 
 T = TypeVar('T')
 R = TypeVar('R')
@@ -130,6 +131,8 @@ class DataFrame:
         self.distinct: bool = False
         self.ctes: List[CommonTableExpression] = []
         self._table_class: Optional[Type] = None
+        
+        self.operation_sequence: Optional['Operation'] = None
     
     def copy(self) -> 'DataFrame':
         """
@@ -151,6 +154,9 @@ class DataFrame:
         result.distinct = self.distinct
         result.ctes = self.ctes.copy()
         result._table_class = self._table_class  # Copy the table class reference
+        
+        result.operation_sequence = self.operation_sequence
+        
         return result
     
     @classmethod
@@ -182,6 +188,9 @@ class DataFrame:
         Returns:
             The DataFrame with the columns selected
         """
+        # Create a copy of the DataFrame
+        result = self.copy()
+        
         column_list = []
         for col in columns:
             if isinstance(col, Column):
@@ -210,8 +219,15 @@ class DataFrame:
             else:
                 raise TypeError(f"Unsupported column type: {type(col)}")
         
-        self.columns = column_list
-        return self
+        result.columns = column_list
+        
+        from .operations import SelectOperation
+        result.operation_sequence = SelectOperation(
+            previous_operation=self.operation_sequence,
+            columns=column_list.copy()
+        )
+        
+        return result
         
     def extend(self, *columns: Union[Column, Callable[[Any], Any]]) -> 'DataFrame':
         """
@@ -293,14 +309,23 @@ class DataFrame:
             alias = "x"  # Use 'x' as the default table alias for single-table operations
             
         df = cls()
-        df.source = TableReference(table_name=table_name, schema=schema, alias=alias)
         
         # Create a basic schema with Any type for columns
         # This is a placeholder until the actual schema is determined
         basic_schema = TableSchema(name=table_name, columns={"*": type(Any)})
         
+        df.source = TableReference(table_name=table_name, schema=schema, alias=alias)
+        
         # Create a dynamic dataclass and store it on the DataFrame
         df._table_class = create_dynamic_dataclass_from_schema(table_name, basic_schema)
+        
+        from .operations import FromTableOperation
+        df.operation_sequence = FromTableOperation(
+            table_name=table_name,
+            schema=schema,
+            alias=alias,
+            table_schema=basic_schema
+        )
         
         return df
     
@@ -321,6 +346,7 @@ class DataFrame:
             alias = "x"  # Use 'x' as the default table alias for single-table operations
             
         df = cls()
+        
         df.source = TableReference(
             table_name=table_name, 
             table_schema=table_schema,
@@ -329,6 +355,14 @@ class DataFrame:
         
         # Create a dynamic dataclass and store it on the DataFrame
         df._table_class = create_dynamic_dataclass_from_schema(table_name, table_schema)
+        
+        from .operations import FromTableOperation
+        df.operation_sequence = FromTableOperation(
+            table_name=table_name,
+            schema=None,
+            alias=alias,
+            table_schema=table_schema
+        )
         
         return df
     
@@ -352,7 +386,6 @@ class DataFrame:
         # Convert the lambda to a filter condition
         filter_condition = self._lambda_to_filter_condition(condition)
         
-        # If we already have a filter condition, combine them with AND
         if result.filter_condition:
             result.filter_condition = BinaryOperation(
                 left=result.filter_condition,
@@ -361,6 +394,12 @@ class DataFrame:
             )
         else:
             result.filter_condition = filter_condition
+        
+        from .operations import FilterOperation
+        result.operation_sequence = FilterOperation(
+            previous_operation=self.operation_sequence,
+            condition=filter_condition
+        )
         
         return result
     
@@ -425,12 +464,17 @@ class DataFrame:
             else:
                 expressions.append(col)
         
-        # Set group_by_clauses with the parsed expressions
         df_copy.group_by_clauses = expressions
+        
+        from .operations import GroupByOperation
+        df_copy.operation_sequence = GroupByOperation(
+            previous_operation=self.operation_sequence,
+            columns=expressions.copy()
+        )
         
         return df_copy
     
-    def order_by(self, lambda_func: Callable[[Any], Any]) -> 'DataFrame':
+    def order_by(self, lambda_func: Callable[[Any], Any], direction: Optional[Union[str, Callable]] = None) -> 'DataFrame':
         """
         Order the DataFrame by the specified columns.
         
@@ -440,6 +484,7 @@ class DataFrame:
                 - A lambda that returns a tuple with Sort enum (e.g., lambda x: (x.column_name, Sort.DESC))
                 - A lambda that returns an array of column references and tuples (e.g., lambda x: 
                   [x.department, (x.salary, Sort.DESC), x.name])
+            direction: Optional string direction ("ASC" or "DESC") to apply to all columns
                 
         Returns:
             The DataFrame with the ordering applied
@@ -447,7 +492,18 @@ class DataFrame:
         Raises:
             ValueError: If an unsupported lambda format is provided
         """
+        if callable(direction):
+            raise ValueError("Multiple lambda functions are not supported.")
+            
+        # Create a copy of the DataFrame
+        result = self.copy()
+        
         default_direction = Sort.ASC
+        
+        if isinstance(direction, str) and direction.upper() == "DESC":
+            default_direction = Sort.DESC
+            
+        order_by_clauses = []
         
         # Parse the lambda function
         from ..utils.lambda_parser import LambdaParser
@@ -477,7 +533,7 @@ class DataFrame:
                         added_columns.add(col_expr.name)
                         
                     # Use provided sort direction
-                    self.order_by_clauses.append(OrderByClause(
+                    order_by_clauses.append(OrderByClause(
                         expression=col_expr,
                         direction=sort_dir
                     ))
@@ -490,23 +546,31 @@ class DataFrame:
                     if isinstance(single_expr, ColumnReference):
                         added_columns.add(single_expr.name)
                         
-                    self.order_by_clauses.append(OrderByClause(
+                    order_by_clauses.append(OrderByClause(
                         expression=single_expr,
                         direction=default_direction
                     ))
         elif isinstance(expr, tuple) and len(expr) == 2:
             col_expr, sort_dir = expr
-            self.order_by_clauses.append(OrderByClause(
+            order_by_clauses.append(OrderByClause(
                 expression=col_expr,
                 direction=sort_dir
             ))
         else:
-            self.order_by_clauses.append(OrderByClause(
+            order_by_clauses.append(OrderByClause(
                 expression=expr,
                 direction=default_direction
             ))
         
-        return self
+        result.order_by_clauses = order_by_clauses
+        
+        from .operations import OrderByOperation
+        result.operation_sequence = OrderByOperation(
+            previous_operation=self.operation_sequence,
+            clauses=order_by_clauses.copy()
+        )
+        
+        return result
     
     def limit(self, limit: int) -> 'DataFrame':
         """
@@ -518,8 +582,18 @@ class DataFrame:
         Returns:
             The DataFrame with the limit applied
         """
-        self.limit_value = limit
-        return self
+        # Create a copy of the DataFrame
+        result = self.copy()
+        
+        result.limit_value = limit
+        
+        from .operations import LimitOperation
+        result.operation_sequence = LimitOperation(
+            previous_operation=self.operation_sequence,
+            limit=limit
+        )
+        
+        return result
     
     def offset(self, offset: int) -> 'DataFrame':
         """
@@ -531,8 +605,18 @@ class DataFrame:
         Returns:
             The DataFrame with the offset applied
         """
-        self.offset_value = offset
-        return self
+        # Create a copy of the DataFrame
+        result = self.copy()
+        
+        result.offset_value = offset
+        
+        from .operations import OffsetOperation
+        result.operation_sequence = OffsetOperation(
+            previous_operation=self.operation_sequence,
+            offset=offset
+        )
+        
+        return result
     
     def distinct_rows(self) -> 'DataFrame':
         """
@@ -541,8 +625,17 @@ class DataFrame:
         Returns:
             The DataFrame with DISTINCT applied
         """
-        self.distinct = True
-        return self
+        # Create a copy of the DataFrame
+        result = self.copy()
+        
+        result.distinct = True
+        
+        from .operations import DistinctOperation
+        result.operation_sequence = DistinctOperation(
+            previous_operation=self.operation_sequence
+        )
+        
+        return result
         
     def having(self, condition: Union[Callable[[Any], bool], Callable[[Any, Any], bool], FilterCondition, Expression]) -> 'DataFrame':
         """
@@ -597,6 +690,12 @@ class DataFrame:
                 df_copy.having_condition = FilterCondition(condition)
             else:
                 df_copy.having_condition = condition
+        
+        from .operations import HavingOperation
+        df_copy.operation_sequence = HavingOperation(
+            previous_operation=self.operation_sequence,
+            condition=df_copy.having_condition
+        )
             
         return df_copy
         
@@ -645,6 +744,12 @@ class DataFrame:
                 df_copy.qualify_condition = FilterCondition(condition)
             else:
                 df_copy.qualify_condition = condition
+        
+        from .operations import QualifyOperation
+        df_copy.operation_sequence = QualifyOperation(
+            previous_operation=self.operation_sequence,
+            condition=df_copy.qualify_condition
+        )
             
         return df_copy
     
@@ -662,13 +767,18 @@ class DataFrame:
         Returns:
             The DataFrame with the CTE added
         """
-        self.ctes.append(CommonTableExpression(
+        # Create a copy of the DataFrame
+        result = self.copy()
+        
+        result.ctes.append(CommonTableExpression(
             name=name,
             query=query,
             columns=columns or [],
             is_recursive=is_recursive
         ))
-        return self
+        
+        
+        return result
     
     def join(self, right: Union['DataFrame', TableReference], 
              condition: Callable[[Any, Any], bool], 
@@ -726,6 +836,17 @@ class DataFrame:
         result.columns = self.columns.copy()
         if isinstance(right, DataFrame):
             result.columns.extend(right.columns)
+        
+        from .operations import JoinOperation as OpJoinOperation  # Rename to avoid conflict
+        result.operation_sequence = OpJoinOperation(
+            previous_operation=self.operation_sequence,
+            left=self.source,
+            right=right_source,
+            condition=join_condition,
+            join_type=join_type,
+            left_alias=left_alias,
+            right_alias=right_alias
+        )
         
         return result
     
@@ -872,6 +993,29 @@ class DataFrame:
                 sample_data[field_name] = None
         
         return table_class(**sample_data)
+    
+    def get_operation_sequence_list(self) -> List['Operation']:
+        """
+        Get the sequence of operations as a list, from earliest to latest.
+        
+        Returns:
+            A list of operations in the order they were applied
+        """
+        if not self.operation_sequence:
+            return []
+            
+        operations = []
+        current = self.operation_sequence
+        
+        stack = []
+        while current:
+            stack.append(current)
+            current = current.previous_operation
+        
+        while stack:
+            operations.append(stack.pop())
+        
+        return operations
     
     def to_sql(self, dialect: str = "duckdb") -> str:
         """
