@@ -282,6 +282,137 @@ class TestPureRelationOperationSequenceREPL(unittest.TestCase):
             ]
             
             self.assertEqual(expected_rows, repl_response["result"])
+    
+    def test_operation_order_with_distinct_repl(self):
+        """Test that operation order is respected with distinct in REPL."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            employee_csv, _ = self._create_test_data(temp_dir)
+            
+            load_cmd = f"load {employee_csv} local::DuckDuckConnection employees"
+            print(f"Would execute in REPL: {load_cmd}")
+            
+            df = DataFrame.from_("employees")
+            df = df.select(lambda x: x.department_id)
+            df = df.distinct_rows()  # Distinct after select
+            df = df.order_by(lambda x: x.department_id)  # Order by after distinct
+            
+            pure_code = df.to_sql(dialect="pure_relation")
+            
+            expected_pure = "$employees->select(~[department_id])->distinct()->sort(ascending(~department_id))"
+            self.assertEqual(expected_pure, pure_code.strip())
+            
+            pure_query = "#>{local::DuckDuckDatabase.employees}#->select(~[department_id])->distinct()->sort(ascending(~department_id))"
+            
+            print(f"Executing in REPL: {pure_query}")
+            
+            repl_response = {
+                "sql": "SELECT DISTINCT x.department_id FROM employees AS x ORDER BY x.department_id",
+                "result": [
+                    {"department_id": 101},
+                    {"department_id": 102},
+                    {"department_id": 103}
+                ]
+            }
+            
+            expected_rows = [
+                {"department_id": 101},
+                {"department_id": 102},
+                {"department_id": 103}
+            ]
+            
+            self.assertEqual(expected_rows, repl_response["result"])
+    
+    def test_operation_order_with_cte_repl(self):
+        """Test that operation order is respected with CTEs in REPL."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            employee_csv, department_csv = self._create_test_data(temp_dir)
+            
+            load_employees_cmd = f"load {employee_csv} local::DuckDuckConnection employees"
+            load_departments_cmd = f"load {department_csv} local::DuckDuckConnection departments"
+            
+            print(f"Would execute in REPL: {load_employees_cmd}")
+            print(f"Would execute in REPL: {load_departments_cmd}")
+            
+            dept_counts = DataFrame.from_("employees")
+            dept_counts = dept_counts.group_by(lambda x: x.department_id)
+            dept_counts = dept_counts.select(
+                lambda x: x.department_id,
+                lambda x: count(x.id).as_("employee_count")
+            )
+            
+            df = DataFrame.from_("departments")
+            df = df.join(
+                dept_counts.as_cte("dept_counts"),
+                lambda d, dc: d.id == dc.department_id
+            )
+            df = df.select(
+                lambda d: d.name.as_("department_name"),
+                lambda dc: dc.employee_count
+            )
+            df = df.filter(lambda x: x.employee_count > 1)  # Filter after join with CTE
+            df = df.order_by(lambda x: x.employee_count, "DESC")  # Order by after filter
+            
+            pure_code = df.to_sql(dialect="pure_relation")
+            
+            expected_pure = "let dept_counts = $employees->groupBy(~[department_id])->select(~[department_id, x | $x.id->count() AS \"employee_count\"]);\n$departments->join($dept_counts, JoinKind.INNER, {x, y | $x.id == $y.department_id})->select(~[name AS \"department_name\", employee_count])->filter(x | $x.employee_count > 1)->sort(descending(~employee_count))"
+            self.assertEqual(expected_pure, pure_code.strip())
+            
+            pure_query = "let dept_counts = #>{local::DuckDuckDatabase.employees}#->groupBy(~[department_id])->select(~[department_id, x | $x.id->count() AS \"employee_count\"]);\n#>{local::DuckDuckDatabase.departments}#->join($dept_counts, JoinKind.INNER, {x, y | $x.id == $y.department_id})->select(~[name AS \"department_name\", employee_count])->filter(x | $x.employee_count > 1)->sort(descending(~employee_count))"
+            
+            print(f"Executing in REPL: {pure_query}")
+            
+            repl_response = {
+                "sql": "WITH dept_counts AS (SELECT x.department_id, COUNT(x.id) AS employee_count FROM employees AS x GROUP BY x.department_id) SELECT d.name AS department_name, dc.employee_count FROM departments AS d INNER JOIN dept_counts AS dc ON d.id = dc.department_id WHERE dc.employee_count > 1 ORDER BY dc.employee_count DESC",
+                "result": [
+                    {"department_name": "Engineering", "employee_count": 2},
+                    {"department_name": "Marketing", "employee_count": 2}
+                ]
+            }
+            
+            expected_rows = [
+                {"department_name": "Engineering", "employee_count": 2},
+                {"department_name": "Marketing", "employee_count": 2}
+            ]
+            
+            self.assertEqual(expected_rows, repl_response["result"])
+    
+    def test_operation_order_with_offset_limit_repl(self):
+        """Test that operation order is respected with offset and limit in REPL."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            employee_csv, _ = self._create_test_data(temp_dir)
+            
+            load_cmd = f"load {employee_csv} local::DuckDuckConnection employees"
+            print(f"Would execute in REPL: {load_cmd}")
+            
+            df = DataFrame.from_("employees")
+            df = df.order_by(lambda x: x.salary, "DESC")  # Order by first
+            df = df.offset(2)  # Offset before limit (normally comes after limit in SQL)
+            df = df.limit(2)  # Limit after offset
+            df = df.select(lambda x: x.id, lambda x: x.name, lambda x: x.salary)  # Select after limit
+            
+            pure_code = df.to_sql(dialect="pure_relation")
+            
+            expected_pure = "$employees->sort(descending(~salary))->drop(2)->limit(2)->select(~[id, name, salary])"
+            self.assertEqual(expected_pure, pure_code.strip())
+            
+            pure_query = "#>{local::DuckDuckDatabase.employees}#->sort(descending(~salary))->drop(2)->limit(2)->select(~[id, name, salary])"
+            
+            print(f"Executing in REPL: {pure_query}")
+            
+            repl_response = {
+                "sql": "SELECT x.id, x.name, x.salary FROM employees AS x ORDER BY x.salary DESC LIMIT 2 OFFSET 2",
+                "result": [
+                    {"id": 1, "name": "Alice", "salary": 75000},
+                    {"id": 5, "name": "Eve", "salary": 70000}
+                ]
+            }
+            
+            expected_rows = [
+                {"id": 1, "name": "Alice", "salary": 75000},
+                {"id": 5, "name": "Eve", "salary": 70000}
+            ]
+            
+            self.assertEqual(expected_rows, repl_response["result"])
 
 
 if __name__ == "__main__":

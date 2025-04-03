@@ -27,17 +27,17 @@
    - Verify generated Pure code matches expected format
    - Simulate REPL execution and result validation
 
-6. [ ] Distinct operation sequence with REPL
+6. [x] Distinct operation sequence with REPL
    - Test select, distinct, order by in non-standard order
    - Verify generated Pure code matches expected format
    - Simulate REPL execution and result validation
 
-7. [ ] CTE operation sequence with REPL
+7. [x] CTE operation sequence with REPL
    - Test CTE creation and usage in non-standard operation order
    - Verify generated Pure code matches expected format
    - Simulate REPL execution and result validation
 
-8. [ ] Offset and limit operation sequence with REPL
+8. [x] Offset and limit operation sequence with REPL
    - Test offset before limit in non-standard order
    - Verify generated Pure code matches expected format
    - Simulate REPL execution and result validation
