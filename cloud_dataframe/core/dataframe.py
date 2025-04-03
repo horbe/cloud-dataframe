@@ -779,6 +779,22 @@ class DataFrame:
         
         
         return result
+        
+    def as_cte(self, name: str, columns: Optional[List[str]] = None) -> SubquerySource:
+        """
+        Create a CTE source from this DataFrame.
+        
+        Args:
+            name: The name of the CTE
+            columns: Optional column names for the CTE
+            
+        Returns:
+            A SubquerySource representing the CTE
+        """
+        return SubquerySource(
+            alias=name,
+            dataframe=self
+        )
     
     def join(self, right: Union['DataFrame', TableReference], 
              condition: Callable[[Any, Any], bool], 
@@ -810,8 +826,10 @@ class DataFrame:
                 )
         elif isinstance(right, TableReference):
             right_source = right
+        elif isinstance(right, SubquerySource):
+            right_source = right
         else:
-            raise TypeError("Right side of join must be a DataFrame or TableReference")
+            raise TypeError("Right side of join must be a DataFrame, TableReference, or SubquerySource")
         
         import inspect
         lambda_params = list(inspect.signature(condition).parameters.keys())
