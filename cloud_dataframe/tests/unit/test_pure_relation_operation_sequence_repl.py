@@ -235,8 +235,9 @@ class TestPureRelationOperationSequenceREPL(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             employee_csv, _ = self._create_test_data(temp_dir)
             
-            load_cmd = f"load {employee_csv} local::DuckDuckConnection employees"
-            print(f"Would execute in REPL: {load_cmd}")
+            load_response = load_csv_to_repl(employee_csv, "local::DuckDuckConnection", "employees")
+            if "error" in load_response:
+                self.fail(f"Failed to load data into REPL: {load_response['error']}")
             
             df = DataFrame.from_("employees")
             df = df.select(
@@ -259,17 +260,15 @@ class TestPureRelationOperationSequenceREPL(unittest.TestCase):
             
             pure_query = "#>{local::DuckDuckDatabase.employees}#->select(~[id, name, department_id, salary, x | $x->rowNumber()->over(partitionBy(~[department_id]), orderBy(descending(~salary))) AS \"salary_rank\"])->filter(x | $x.salary_rank <= 1)->sort(ascending(~department_id))"
             
-            print(f"Executing in REPL: {pure_query}")
+            repl_response = execute_pure_query(pure_query)
+            if "error" in repl_response:
+                self.fail(f"Failed to execute query in REPL: {repl_response['error']}")
             
-            repl_response = {
-                "sql": "SELECT x.id, x.name, x.department_id, x.salary, ROW_NUMBER() OVER (PARTITION BY x.department_id ORDER BY x.salary DESC) AS salary_rank FROM employees AS x QUALIFY salary_rank <= 1 ORDER BY x.department_id",
-                "result": [
-                    {"id": 1, "name": "Alice", "department_id": 101, "salary": 75000, "salary_rank": 1},
-                    {"id": 2, "name": "Bob", "department_id": 102, "salary": 85000, "salary_rank": 1},
-                    {"id": 4, "name": "Diana", "department_id": 103, "salary": 95000, "salary_rank": 1}
-                ]
-            }
+            self.assertIn("sql", repl_response)
+            expected_sql = "SELECT x.id, x.name, x.department_id, x.salary, ROW_NUMBER() OVER (PARTITION BY x.department_id ORDER BY x.salary DESC) AS salary_rank FROM employees AS x QUALIFY salary_rank <= 1 ORDER BY x.department_id"
+            self.assertEqual(expected_sql, repl_response["sql"].strip())
             
+            self.assertIn("result", repl_response)
             expected_rows = [
                 {"id": 1, "name": "Alice", "department_id": 101, "salary": 75000, "salary_rank": 1},
                 {"id": 2, "name": "Bob", "department_id": 102, "salary": 85000, "salary_rank": 1},
@@ -283,8 +282,9 @@ class TestPureRelationOperationSequenceREPL(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             employee_csv, _ = self._create_test_data(temp_dir)
             
-            load_cmd = f"load {employee_csv} local::DuckDuckConnection employees"
-            print(f"Would execute in REPL: {load_cmd}")
+            load_response = load_csv_to_repl(employee_csv, "local::DuckDuckConnection", "employees")
+            if "error" in load_response:
+                self.fail(f"Failed to load data into REPL: {load_response['error']}")
             
             df = DataFrame.from_("employees")
             df = df.select(lambda x: x.department_id)
@@ -298,17 +298,15 @@ class TestPureRelationOperationSequenceREPL(unittest.TestCase):
             
             pure_query = "#>{local::DuckDuckDatabase.employees}#->select(~[department_id])->distinct()->sort(ascending(~department_id))"
             
-            print(f"Executing in REPL: {pure_query}")
+            repl_response = execute_pure_query(pure_query)
+            if "error" in repl_response:
+                self.fail(f"Failed to execute query in REPL: {repl_response['error']}")
             
-            repl_response = {
-                "sql": "SELECT DISTINCT x.department_id FROM employees AS x ORDER BY x.department_id",
-                "result": [
-                    {"department_id": 101},
-                    {"department_id": 102},
-                    {"department_id": 103}
-                ]
-            }
+            self.assertIn("sql", repl_response)
+            expected_sql = "SELECT DISTINCT x.department_id FROM employees AS x ORDER BY x.department_id"
+            self.assertEqual(expected_sql, repl_response["sql"].strip())
             
+            self.assertIn("result", repl_response)
             expected_rows = [
                 {"department_id": 101},
                 {"department_id": 102},
