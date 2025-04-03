@@ -47,7 +47,24 @@ def _generate_ctes(ctes: List[CommonTableExpression]) -> str:
     Returns:
         The generated Pure Relation code string for CTEs
     """
-    return "// CTEs are not directly supported in Pure Relation language"
+    if not ctes:
+        return ""
+        
+    cte_parts = []
+    
+    for cte in ctes:
+        if isinstance(cte.query, DataFrame):
+            df_copy = cte.query.copy()
+            saved_ctes = df_copy.ctes
+            df_copy.ctes = []  # Temporarily remove CTEs to avoid recursion
+            query_code = _generate_query(df_copy)  # Generate only the query part
+            df_copy.ctes = saved_ctes  # Restore CTEs
+        else:
+            query_code = cte.query
+        
+        cte_parts.append(f"let {cte.name} = {query_code};")
+    
+    return "\n".join(cte_parts)
 
 
 def _generate_query(df: DataFrame) -> str:
@@ -73,6 +90,9 @@ def _generate_query(df: DataFrame) -> str:
         
     if hasattr(df, 'having_condition') and df.having_condition:
         relation_code = _apply_having(relation_code, df.having_condition)
+        
+    if hasattr(df, 'qualify_condition') and df.qualify_condition:
+        relation_code = _apply_qualify(relation_code, df.qualify_condition)
         
     if df.order_by_clauses:
         relation_code = _apply_order_by(relation_code, df.order_by_clauses)
@@ -250,6 +270,27 @@ def _apply_having(relation_code: str, having_condition: FilterCondition) -> str:
     return f"{relation_code}->filter(x | {condition_code.replace('x.', '$x.')})"
 
 
+def _apply_qualify(relation_code: str, qualify_condition: FilterCondition) -> str:
+    """
+    Apply a qualify operation to a relation.
+    
+    Args:
+        relation_code: The code for the relation to filter with qualify
+        qualify_condition: The qualify condition to apply
+        
+    Returns:
+        The code for the relation with qualify applied
+    """
+    if hasattr(qualify_condition, 'condition'):
+        condition_code = _generate_expression(qualify_condition.condition)
+    else:
+        condition_code = _generate_expression(qualify_condition)
+        
+    condition_code = condition_code.replace("df.", "")
+    
+    return f"{relation_code}->filter(x | {condition_code.replace('x.', '$x.')})"
+
+
 def _apply_order_by(relation_code: str, order_by_clauses: List[OrderByClause]) -> str:
     """
     Apply an order by operation to a relation.
@@ -300,7 +341,7 @@ def _apply_offset(relation_code: str, offset: int) -> str:
     Returns:
         The code for the relation with offset applied
     """
-    return f"// Offset is not directly supported in Pure Relation language\n{relation_code}"
+    return f"{relation_code}->drop({offset})"
 
 
 def _generate_expression(expr: Any) -> str:

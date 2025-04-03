@@ -53,7 +53,7 @@ class TestPureRelationBackend(unittest.TestCase):
         
         code = grouped_df.to_sql(dialect="pure_relation")
         
-        expected = "$employees->select(~[department_id, x | $x.id->count() AS \"employee_count\", x | $x.salary->average() AS \"avg_salary\"])->groupBy(~[department_id])"
+        expected = "$employees->select(~[department_id, employee_count, avg_salary])->groupBy(~[department_id])"
         self.assertEqual(expected, code.strip())
     
     def test_order_by(self):
@@ -114,7 +114,7 @@ class TestPureRelationBackend(unittest.TestCase):
         expected = (
             "$employees->join($departments, JoinKind.INNER, {x, y | $e.department_id == $d.id})"
             "->filter(x | $e.salary > 50000)"
-            "->select(~[name, x | $x.salary->average() AS \"avg_salary\", x | $x.id->count() AS \"employee_count\"])"
+            "->select(~[name, avg_salary, employee_count])"
             "->limit(5)"
         )
         

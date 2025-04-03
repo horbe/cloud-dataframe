@@ -253,24 +253,37 @@ class DataFrame:
                     
                     if isinstance(expr, list):
                         # Handle array returns from lambda functions
-                        self.columns.extend(expr)
+                        for item in expr:
+                            if isinstance(item, Column):
+                                self.columns.append(item)
+                            elif isinstance(item, Expression):
+                                self.columns.append(Column(name=f"col_{len(self.columns)}", expression=item))
+                            elif isinstance(item, tuple) and len(item) == 2 and isinstance(item[0], Expression):
+                                self.columns.append(Column(name=f"col_{len(self.columns)}", expression=item[0]))
                     else:
                         # Check if this is already a Column object
                         if isinstance(expr, Column):
                             self.columns.append(expr)
-                        else:
-                            # Convert to a Column if it's not already
-                            self.columns.append(expr)
+                        elif isinstance(expr, Expression):
+                            self.columns.append(Column(name=f"col_{len(self.columns)}", expression=expr))
                 except ValueError as e:
                     expr = LambdaParser.parse_lambda(col, None)
                     
                     if isinstance(expr, list):
-                        self.columns.extend(expr)
+                        # Handle array returns from lambda functions
+                        for item in expr:
+                            if isinstance(item, Column):
+                                self.columns.append(item)
+                            elif isinstance(item, Expression):
+                                self.columns.append(Column(name=f"col_{len(self.columns)}", expression=item))
+                            elif isinstance(item, tuple) and len(item) == 2 and isinstance(item[0], Expression):
+                                self.columns.append(Column(name=f"col_{len(self.columns)}", expression=item[0]))
                     else:
+                        # Check if this is already a Column object
                         if isinstance(expr, Column):
                             self.columns.append(expr)
-                        else:
-                            self.columns.append(expr)
+                        elif isinstance(expr, Expression):
+                            self.columns.append(Column(name=f"col_{len(self.columns)}", expression=expr))
             else:
                 raise TypeError(f"Unsupported column type: {type(col)}")
         
@@ -354,10 +367,12 @@ class DataFrame:
         
         # If we already have a filter condition, combine them with AND
         if result.filter_condition:
-            result.filter_condition = BinaryOperation(
-                left=result.filter_condition,
-                operator="AND",
-                right=filter_condition
+            result.filter_condition = FilterCondition(
+                BinaryOperation(
+                    left=result.filter_condition.condition,
+                    operator="AND",
+                    right=filter_condition.condition
+                )
             )
         else:
             result.filter_condition = filter_condition
@@ -587,8 +602,25 @@ class DataFrame:
                 # Parse the lambda function to get the expression
                 parsed_condition = LambdaParser.parse_lambda(condition, table_schema)
                 
-                # Create a FilterCondition with the parsed expression
-                df_copy.having_condition = FilterCondition(parsed_condition)
+                if isinstance(parsed_condition, list):
+                    if len(parsed_condition) > 0:
+                        expr = parsed_condition[0]
+                        if isinstance(expr, Expression):
+                            df_copy.having_condition = FilterCondition(expr)
+                        else:
+                            raise ValueError(f"Invalid expression type in having condition: {type(expr)}")
+                    else:
+                        raise ValueError("Empty list returned from lambda parser")
+                elif isinstance(parsed_condition, tuple):
+                    if len(parsed_condition) > 0 and isinstance(parsed_condition[0], Expression):
+                        df_copy.having_condition = FilterCondition(parsed_condition[0])
+                    else:
+                        raise ValueError(f"Invalid tuple format in having condition: {parsed_condition}")
+                elif isinstance(parsed_condition, Expression):
+                    # Create a FilterCondition with the parsed expression
+                    df_copy.having_condition = FilterCondition(parsed_condition)
+                else:
+                    raise ValueError(f"Unsupported return type from lambda parser: {type(parsed_condition)}")
             except Exception as e:
                 raise ValueError(f"Error parsing having lambda: {e}")
         else:
@@ -635,8 +667,25 @@ class DataFrame:
             try:
                 parsed_condition = LambdaParser.parse_lambda(condition, None)
                 
-                # Create a FilterCondition with the parsed expression
-                df_copy.qualify_condition = FilterCondition(parsed_condition)
+                if isinstance(parsed_condition, list):
+                    if len(parsed_condition) > 0:
+                        expr = parsed_condition[0]
+                        if isinstance(expr, Expression):
+                            df_copy.qualify_condition = FilterCondition(expr)
+                        else:
+                            raise ValueError(f"Invalid expression type in qualify condition: {type(expr)}")
+                    else:
+                        raise ValueError("Empty list returned from lambda parser")
+                elif isinstance(parsed_condition, tuple):
+                    if len(parsed_condition) > 0 and isinstance(parsed_condition[0], Expression):
+                        df_copy.qualify_condition = FilterCondition(parsed_condition[0])
+                    else:
+                        raise ValueError(f"Invalid tuple format in qualify condition: {parsed_condition}")
+                elif isinstance(parsed_condition, Expression):
+                    # Create a FilterCondition with the parsed expression
+                    df_copy.qualify_condition = FilterCondition(parsed_condition)
+                else:
+                    raise ValueError(f"Unsupported return type from lambda parser: {type(parsed_condition)}")
             except Exception as e:
                 raise ValueError(f"Error parsing qualify lambda: {e}")
         else:
