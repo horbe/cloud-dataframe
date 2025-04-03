@@ -307,8 +307,9 @@ def _generate_expression(expr: Any) -> str:
             
         column_ref = f"{source_alias}.{expr.name}"
         
-        if hasattr(expr, 'column_alias') and expr.column_alias:
-            return f"{column_ref} AS {expr.column_alias}"
+        column_alias = getattr(expr, 'column_alias', None)
+        if column_alias:
+            return f"{column_ref} AS {column_alias}"
         else:
             return column_ref
     
