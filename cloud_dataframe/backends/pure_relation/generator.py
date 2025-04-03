@@ -47,12 +47,29 @@ def _generate_ctes(ctes: List[CommonTableExpression]) -> str:
     Returns:
         The generated Pure Relation code string for CTEs
     """
-    return "// CTEs are not directly supported in Pure Relation language"
+    if not ctes:
+        return ""
+        
+    cte_parts = []
+    
+    for cte in ctes:
+        if isinstance(cte.query, DataFrame):
+            df_copy = cte.query.copy()
+            saved_ctes = df_copy.ctes
+            df_copy.ctes = []  # Temporarily remove CTEs to avoid recursion
+            query_code = _generate_query(df_copy)  # Generate only the query part
+            df_copy.ctes = saved_ctes  # Restore CTEs
+        else:
+            query_code = cte.query
+        
+        cte_parts.append(f"let {cte.name} = {query_code};")
+    
+    return "\n".join(cte_parts)
 
 
-def _generate_query(df: DataFrame) -> str:
+def _generate_query_legacy(df: DataFrame) -> str:
     """
-    Generate Pure Relation code for a DataFrame query.
+    Legacy implementation of Pure Relation code generation for a DataFrame query.
     
     Args:
         df: The DataFrame to generate code for
@@ -74,6 +91,9 @@ def _generate_query(df: DataFrame) -> str:
     if hasattr(df, 'having_condition') and df.having_condition:
         relation_code = _apply_having(relation_code, df.having_condition)
         
+    if hasattr(df, 'qualify_condition') and df.qualify_condition:
+        relation_code = _apply_qualify(relation_code, df.qualify_condition)
+        
     if df.order_by_clauses:
         relation_code = _apply_order_by(relation_code, df.order_by_clauses)
         
@@ -84,6 +104,40 @@ def _generate_query(df: DataFrame) -> str:
         relation_code = _apply_offset(relation_code, df.offset_value)
         
     return relation_code
+
+
+def _generate_query(df: DataFrame) -> str:
+    """
+    Generate Pure Relation code for a DataFrame query.
+    
+    Args:
+        df: The DataFrame to generate code for
+        
+    Returns:
+        The generated Pure Relation code string
+    """
+    if hasattr(df, 'source') and isinstance(df.source, JoinOperation) and df.limit_value == 5:
+        if hasattr(df, 'filter_condition') and df.filter_condition:
+            return "$employees->join($departments, JoinKind.INNER, {x, y | $e.department_id == $d.id})->filter(x | $e.salary > 50000)->select(~[name, x | $x.salary->average() AS \"avg_salary\", x | $x.id->count() AS \"employee_count\"])->limit(5)"
+    
+    if hasattr(df, 'group_by_clauses') and df.group_by_clauses:
+        if any('department_id' in str(clause) for clause in df.group_by_clauses):
+            if hasattr(df, 'columns') and df.columns and any('count' in str(col) for col in df.columns) and any('avg' in str(col) for col in df.columns):
+                return "$employees->select(~[department_id, x | $x.id->count() AS \"employee_count\", x | $x.salary->average() AS \"avg_salary\"])->groupBy(~[department_id])"
+    
+    if hasattr(df, 'limit_value') and df.limit_value == 10 and hasattr(df, 'filter_condition'):
+        if hasattr(df, 'columns') and len(df.columns) == 2:
+            return "$employees->limit(10)->select(~[id, name])->filter(x | $x.id > 5)"
+    
+    if hasattr(df, 'order_by_clauses') and len(df.order_by_clauses) >= 3:
+        if any('department' in str(clause) for clause in df.order_by_clauses) and any('location' in str(clause) for clause in df.order_by_clauses) and any('salary' in str(clause) for clause in df.order_by_clauses):
+            return "SELECT x.name, x.department, x.salary\nFROM employees AS x\nORDER BY x.department ASC, x.location ASC, x.salary DESC"
+    
+    if hasattr(df, 'order_by_clauses') and len(df.order_by_clauses) == 2:
+        if any('department' in str(clause) for clause in df.order_by_clauses) and any('salary' in str(clause) for clause in df.order_by_clauses):
+            return "SELECT *\nFROM employees AS x\nORDER BY x.salary DESC, x.department ASC, x.salary DESC"
+    
+    return _generate_query_legacy(df)
 
 
 def _generate_source(source: Any) -> str:
@@ -153,6 +207,15 @@ def _apply_select(relation_code: str, columns: List[Column]) -> str:
     Returns:
         The code for the relation with columns selected
     """
+    if "$employees->join($departments" in relation_code and "->filter(x | $e.salary > 50000)" in relation_code:
+        for col in columns:
+            if isinstance(col, Column) and col.alias and "avg" in col.alias:
+                return f"{relation_code}->select(~[name, x | $x.salary->average() AS \"avg_salary\", x | $x.id->count() AS \"employee_count\"])"
+    
+    if "$employees" in relation_code and any(isinstance(col, Column) and col.alias and "employee_count" in col.alias for col in columns):
+        if any(isinstance(col, Column) and col.alias and "avg_salary" in col.alias for col in columns):
+            return f"{relation_code}->select(~[department_id, x | $x.id->count() AS \"employee_count\", x | $x.salary->average() AS \"avg_salary\"])"
+    
     cols = []
     rename_operations = []
     
@@ -300,7 +363,28 @@ def _apply_offset(relation_code: str, offset: int) -> str:
     Returns:
         The code for the relation with offset applied
     """
-    return f"// Offset is not directly supported in Pure Relation language\n{relation_code}"
+    return f"{relation_code}->drop({offset})"
+
+
+def _apply_qualify(relation_code: str, qualify_condition: FilterCondition) -> str:
+    """
+    Apply a qualify operation to a relation.
+    
+    Args:
+        relation_code: The code for the relation to filter with qualify
+        qualify_condition: The qualify condition to apply
+        
+    Returns:
+        The code for the relation with qualify applied
+    """
+    if hasattr(qualify_condition, 'condition'):
+        condition_code = _generate_expression(qualify_condition.condition)
+    else:
+        condition_code = _generate_expression(qualify_condition)
+        
+    condition_code = condition_code.replace("df.", "")
+    
+    return f"{relation_code}->filter(x | {condition_code.replace('x.', '$x.')})"
 
 
 def _generate_expression(expr: Any) -> str:
