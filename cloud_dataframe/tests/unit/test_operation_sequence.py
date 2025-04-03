@@ -119,26 +119,14 @@ class TestOperationSequence(unittest.TestCase):
         
         sql = df.to_sql(dialect="duckdb")
         
-        lines = sql.strip().split('\n')
+        expected_sql = """SELECT x.id, x.name
+FROM employees AS x
+LIMIT 10
+WHERE x.id > 5
+GROUP BY x.department_id"""
         
-        limit_index = -1
-        where_index = -1
-        group_by_index = -1
-        
-        for i, line in enumerate(lines):
-            if line.startswith("LIMIT"):
-                limit_index = i
-            if line.startswith("WHERE"):
-                where_index = i
-            if line.startswith("GROUP BY"):
-                group_by_index = i
-        
-        self.assertGreater(limit_index, 0, "LIMIT clause should be present")
-        self.assertGreater(where_index, 0, "WHERE clause should be present")
-        self.assertGreater(group_by_index, 0, "GROUP BY clause should be present")
-        
-        self.assertLess(limit_index, where_index, "LIMIT should come before WHERE based on operation order")
-        self.assertLess(where_index, group_by_index, "WHERE should come before GROUP BY based on operation order")
+        self.assertEqual(sql.strip(), expected_sql.strip(), 
+                         "SQL should respect the exact operation order as defined in the DataFrame operations")
     
     def test_sql_respects_operation_order_pure_relation(self):
         """Test that Pure Relation code generation respects operation order."""
@@ -149,14 +137,7 @@ class TestOperationSequence(unittest.TestCase):
         
         code = df.to_sql(dialect="pure_relation")
         
+        expected_code = "$employees->limit(10)->select(~[id, name])->filter(x | $x.id > 5)"
         
-        limit_pos = code.find("->limit")
-        select_pos = code.find("->select")
-        filter_pos = code.find("->filter")
-        
-        self.assertGreater(limit_pos, 0, "limit operation should be present")
-        self.assertGreater(select_pos, 0, "select operation should be present")
-        self.assertGreater(filter_pos, 0, "filter operation should be present")
-        
-        self.assertLess(limit_pos, select_pos, "limit should come before select based on operation order")
-        self.assertLess(select_pos, filter_pos, "select should come before filter based on operation order")
+        self.assertEqual(code.strip(), expected_code.strip(),
+                         "Pure Relation code should respect the exact operation order as defined in the DataFrame operations")
