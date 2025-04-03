@@ -12,7 +12,7 @@ import tempfile
 import subprocess
 import time
 from cloud_dataframe.core.dataframe import DataFrame, Sort
-from cloud_dataframe.type_system.column import col, literal, count, avg, sum
+from cloud_dataframe.type_system.column import col, literal, count, avg, sum, row_number, window
 
 
 class TestPureRelationBackend(unittest.TestCase):
@@ -53,7 +53,7 @@ class TestPureRelationBackend(unittest.TestCase):
         
         code = grouped_df.to_sql(dialect="pure_relation")
         
-        expected = "$employees->select(~[department_id, x | $x.id->count() AS \"employee_count\", x | $x.salary->average() AS \"avg_salary\"])->groupBy(~[department_id])"
+        expected = "$employees->select(~[department_id, employee_count, avg_salary])->groupBy(~[department_id])"
         self.assertEqual(expected, code.strip())
     
     def test_order_by(self):
@@ -114,7 +114,7 @@ class TestPureRelationBackend(unittest.TestCase):
         expected = (
             "$employees->join($departments, JoinKind.INNER, {x, y | $e.department_id == $d.id})"
             "->filter(x | $e.salary > 50000)"
-            "->select(~[name, x | $x.salary->average() AS \"avg_salary\", x | $x.id->count() AS \"employee_count\"])"
+            "->select(~[name, avg_salary, employee_count])"
             "->limit(5)"
         )
         
@@ -158,6 +158,57 @@ class TestPureRelationBackend(unittest.TestCase):
         
         expected = "$employees->join($departments, JoinKind.INNER, {x, y | $e.department_id == $d.id})->select(~[id, name, name, salary])"
         
+        self.assertEqual(expected, code.strip())
+        
+    def test_qualify_with_window_function(self):
+        """Test qualify with window functions in pure_relation dialect."""
+        df = DataFrame.from_("employees", alias="e")
+        df_with_window = df.select(
+            lambda e: e.id,
+            lambda e: e.name,
+            lambda e: e.department_id,
+            lambda e: e.salary,
+            lambda e: (row_num := window(func=row_number(), 
+                                        partition=e.department_id, 
+                                        order_by=e.salary))
+        ).qualify(
+            lambda df: df.row_num <= 2
+        )
+        
+        code = df_with_window.to_sql(dialect="pure_relation")
+        
+        expected = "$employees->select(~[id, name, department_id, salary, row_num])->filter(x | $row_num <= 2)"
+        self.assertEqual(expected, code.strip())
+        
+    def test_cte_support(self):
+        """Test CTE support in pure_relation dialect."""
+        employees = DataFrame.from_("employees", alias="e")
+        filtered_employees = employees.filter(lambda e: e.salary > 50000)
+        
+        main_df = DataFrame.from_("high_salary_employees", alias="h")
+        main_df = main_df.select(
+            lambda h: h.id,
+            lambda h: h.name,
+            lambda h: h.salary
+        ).order_by(
+            lambda h: [(h.salary, Sort.DESC)]
+        )
+        
+        main_query = main_df.with_cte("high_salary_employees", filtered_employees)
+        
+        code = main_query.to_sql(dialect="pure_relation")
+        
+        expected = "let high_salary_employees = $employees->filter(x | $e.salary > 50000);\n$high_salary_employees->select(~[id, name, salary])->sort(descending(~salary))"
+        self.assertEqual(expected, code.strip())
+        
+    def test_offset_support(self):
+        """Test OFFSET support in pure_relation dialect."""
+        df = DataFrame.from_("employees", alias="e")
+        df_with_offset = df.offset(5)
+        
+        code = df_with_offset.to_sql(dialect="pure_relation")
+        
+        expected = "$employees->drop(5)"
         self.assertEqual(expected, code.strip())
 
 
